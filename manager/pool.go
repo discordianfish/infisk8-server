@@ -96,12 +96,15 @@ func (r *Pool) NewSession(sd string) (webrtc.RTCSessionDescription, error) {
 	return session.Connect(sd)
 }
 
-func (p *Pool) Broadcast(data []byte) {
+func (p *Pool) Broadcast(cid string, data []byte) {
 	for id, s := range *p.sessions {
 		if !s.open {
 			continue
 		}
-		level.Debug(p.logger).Log("msg", "Broadcasting", "id", id, "data", data)
+		if id == cid { // No need to broadcast to ourselves
+			continue
+		}
+		level.Debug(p.logger).Log("msg", "Broadcasting", "id", id)
 		if err := s.dc.Send(datachannel.PayloadBinary{Data: data}); err != nil {
 			level.Warn(p.logger).Log("msg", "Couldn't send data", "error", err, "id", id)
 		}
@@ -154,11 +157,9 @@ func (p *Session) OnDataChannel(d *webrtc.RTCDataChannel) {
 func (p *Session) OnMessage(payload datachannel.Payload) {
 	switch pt := payload.(type) {
 	case *datachannel.PayloadString:
-		fmt.Printf("Message '%s' from DataChannel '%s' payload '%s'\n", pt.PayloadType().String(), p.dc.Label, string(pt.Data))
-		p.Pool.Broadcast(pt.Data)
+		p.Pool.Broadcast(p.ID, pt.Data)
 	case *datachannel.PayloadBinary:
-		fmt.Printf("Message '%s' from DataChannel '%s' payload '% 02x'\n", pt.PayloadType().String(), p.dc.Label, pt.Data)
-		p.Pool.Broadcast(pt.Data)
+		p.Pool.Broadcast(p.ID, pt.Data)
 	default:
 		fmt.Printf("Message '%s' from DataChannel '%s' no payload \n", pt.PayloadType().String(), p.dc.Label)
 	}
