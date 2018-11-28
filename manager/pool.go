@@ -66,7 +66,7 @@ func (m *Manager) NewPool(name string) (*Pool, error) {
 		return nil, fmt.Errorf("Pool with name %s already exists", name)
 	}
 	p := &Pool{
-		logger: m.logger,
+		logger: log.With(m.logger, "pool", name),
 		config: webrtc.RTCConfiguration{
 			IceServers: []webrtc.RTCIceServer{
 				{
@@ -104,10 +104,17 @@ func (p *Pool) Broadcast(cid string, data []byte) {
 		if id == cid { // No need to broadcast to ourselves
 			continue
 		}
-		level.Debug(p.logger).Log("msg", "Broadcasting", "id", id)
-		if err := s.dc.Send(datachannel.PayloadBinary{Data: data}); err != nil {
+		if rand.Intn(100) < 1 {
+			level.Debug(p.logger).Log("msg", "<", "id", id, "data", string(data))
+		}
+		if err := s.dc.Send(datachannel.PayloadString{Data: data}); err != nil {
 			level.Warn(p.logger).Log("msg", "Couldn't send data", "error", err, "id", id)
 		}
+		// FIXME: Consider binary
+		/*
+			if err := s.dc.Send(datachannel.PayloadBinary{Data: data}); err != nil {
+				level.Warn(p.logger).Log("msg", "Couldn't send data", "error", err, "id", id)
+			}*/
 	}
 }
 

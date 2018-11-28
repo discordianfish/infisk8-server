@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -94,5 +93,5 @@ func (a *API) HandleJoin(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		http.Error(w, "Invalid SD", http.StatusBadRequest)
 		return
 	}
-	fmt.Fprint(w, base64.StdEncoding.EncodeToString([]byte(answer.Sdp)))
+	json.NewEncoder(w).Encode(answer)
 }
