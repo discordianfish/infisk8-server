@@ -31,7 +31,7 @@ require (
 	github.com/rs/cors v1.6.0
 	github.com/satori/go.uuid v1.2.0 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
-	golang.org/x/crypto v0.0.0-20181126093934-9eb0be3963ea // indirect
+	golang.org/x/crypto v0.0.0-20181126093934-9eb0be3963ea
 	golang.org/x/net v0.0.0-20181114220301-adae6a3d119a // indirect
 	golang.org/x/sys v0.0.0-20181122145206-62eef0e2fa9b // indirect
 	gopkg.in/yaml.v2 v2.2.1 // indirect

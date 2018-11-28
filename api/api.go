@@ -12,6 +12,7 @@ import (
 	"github.com/go-kit/kit/log/level"
 	"github.com/julienschmidt/httprouter"
 	"github.com/rs/cors"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 const (
@@ -22,12 +23,14 @@ type API struct {
 	logger  log.Logger
 	manager *manager.Manager
 	router  *httprouter.Router
+	acm     *autocert.Manager
 }
 
-func New(logger log.Logger, manager *manager.Manager) *API {
+func New(logger log.Logger, manager *manager.Manager, acm *autocert.Manager) *API {
 	a := &API{
 		logger:  logger,
 		manager: manager,
+		acm:     acm,
 	}
 
 	router := httprouter.New()
@@ -41,6 +44,11 @@ func New(logger log.Logger, manager *manager.Manager) *API {
 func (a *API) ListenAndServe(addr string) error {
 	level.Info(a.logger).Log("msg", "Listening", "addr", addr)
 	return http.ListenAndServe(addr, cors.Default().Handler(a.router))
+}
+
+func (a *API) ListenAndServeTLS(addr string) error {
+	level.Info(a.logger).Log("msg", "Listening", "addr", addr)
+	return http.ListenAndServe(addr, a.acm.HTTPHandler(cors.Default().Handler(a.router)))
 }
 
 type poolsResponse struct {
