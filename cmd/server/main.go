@@ -31,28 +31,25 @@ func fatal(v interface{}) {
 }
 
 func main() {
+	flag.Parse()
 	manager := manager.NewManager(logger)
 	rand.Seed(time.Now().UTC().UnixNano())
 
 	var acm *autocert.Manager
 
-	if *acmeDomain != "" {
-		if *acmeEmail == "" {
-			fatal("Setting -ad requires -ae too")
-		}
-		acm = &autocert.Manager{
-			Client: &acme.Client{
-				DirectoryURL: *acmeURL,
-			},
-			Cache:      autocert.DirCache(*acmeCache),
-			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(*acmeDomain),
-		}
+	acm = &autocert.Manager{
+		Client: &acme.Client{
+			DirectoryURL: *acmeURL,
+		},
+		Cache:      autocert.DirCache(*acmeCache),
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(*acmeDomain),
 	}
 	api := api.New(logger, manager, acm)
 	if *listenHTTPS != "" {
+		level.Debug(logger).Log("msg", "here");
 		go func() {
-			if err := api.ListenAndServe(*listenHTTPS); err != nil {
+			if err := api.ListenAndServeTLS(*listenHTTPS); err != nil {
 				fatal(err)
 			}
 		}()

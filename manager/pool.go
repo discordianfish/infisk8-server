@@ -87,16 +87,16 @@ type Pool struct {
 	sessions *map[string]*Session
 }
 
-func (r *Pool) NewSession(sd string) (webrtc.RTCSessionDescription, error) {
-	session, err := NewSession(r)
+func (r *Pool) NewSession(sd, id string) (webrtc.RTCSessionDescription, error) {
+	session, err := NewSession(r, id)
 	if err != nil {
 		return webrtc.RTCSessionDescription{}, err
 	}
-	(*r.sessions)[session.ID] = session
+	(*r.sessions)[id] = session
 	return session.Connect(sd)
 }
 
-func (p *Pool) Broadcast(cid string, data []byte) {
+func (p *Pool) Broadcast(cid, label string, data []byte) {
 	for id, s := range *p.sessions {
 		if !s.open {
 			continue
@@ -107,7 +107,7 @@ func (p *Pool) Broadcast(cid string, data []byte) {
 		if rand.Intn(100) < 1 {
 			level.Debug(p.logger).Log("msg", "<", "id", id, "data", string(data))
 		}
-		if err := s.dc.Send(datachannel.PayloadString{Data: data}); err != nil {
+		if err := s.dc[label].Send(datachannel.PayloadString{Data: data}); err != nil {
 			level.Warn(p.logger).Log("msg", "Couldn't send data", "error", err, "id", id)
 		}
 		// FIXME: Consider binary
@@ -118,18 +118,17 @@ func (p *Pool) Broadcast(cid string, data []byte) {
 	}
 }
 
-// Session is a session with a client
+// Session is a session with a client, can have multiple datachannels
 type Session struct {
 	logger log.Logger
 	*Pool
-
-	open bool
 	ID   string
+	open bool
 	pc   *webrtc.RTCPeerConnection
-	dc   *webrtc.RTCDataChannel
+	dc   map[string]*webrtc.RTCDataChannel
 }
 
-func NewSession(pool *Pool) (*Session, error) {
+func NewSession(pool *Pool, id string) (*Session, error) {
 	pc, err := webrtc.New(pool.config)
 	if err != nil {
 		return nil, err
@@ -137,9 +136,10 @@ func NewSession(pool *Pool) (*Session, error) {
 
 	p := &Session{
 		logger: pool.logger,
-		ID:     genID(),
 		Pool:   pool,
+		ID:     id,
 		pc:     pc,
+		dc:     make(map[string]*webrtc.RTCDataChannel),
 	}
 
 	pc.OnICEConnectionStateChange = p.OnICEConnectionStateChange
@@ -152,23 +152,23 @@ func (p *Session) OnICEConnectionStateChange(connectionState ice.ConnectionState
 }
 
 func (p *Session) OnDataChannel(d *webrtc.RTCDataChannel) {
-	p.dc = d
+	p.dc[d.Label] = d
 	level.Info(p.logger).Log("msg", "New data channel", "label", d.Label, "id", d.ID)
 
 	d.OnOpen = p.OnOpen
 
-	d.OnMessage = p.OnMessage
+	d.OnMessage = func(payload datachannel.Payload) { p.OnMessage(d.Label, payload) }
 	d.Onmessage = d.OnMessage // FIXME: Upstream bug?
 }
 
-func (p *Session) OnMessage(payload datachannel.Payload) {
+func (p *Session) OnMessage(label string, payload datachannel.Payload) {
 	switch pt := payload.(type) {
 	case *datachannel.PayloadString:
-		p.Pool.Broadcast(p.ID, pt.Data)
+		p.Pool.Broadcast(p.ID, label, pt.Data)
 	case *datachannel.PayloadBinary:
-		p.Pool.Broadcast(p.ID, pt.Data)
+		p.Pool.Broadcast(p.ID, label, pt.Data)
 	default:
-		fmt.Printf("Message '%s' from DataChannel '%s' no payload \n", pt.PayloadType().String(), p.dc.Label)
+		fmt.Printf("Message '%s' from DataChannel '%s' no payload \n", pt.PayloadType().String(), label)
 	}
 }
 

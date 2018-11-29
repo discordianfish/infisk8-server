@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"crypto/tls"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -22,7 +23,7 @@ const (
 type API struct {
 	logger  log.Logger
 	manager *manager.Manager
-	router  *httprouter.Router
+	handler http.Handler
 	acm     *autocert.Manager
 }
 
@@ -36,19 +37,27 @@ func New(logger log.Logger, manager *manager.Manager, acm *autocert.Manager) *AP
 	router := httprouter.New()
 	router.GET("/pools", a.HandlePools)
 	router.PUT("/pool/:pool", a.HandleCreate)
-	router.POST("/pool/:pool/join", a.HandleJoin)
-	a.router = router
+	router.POST("/pool/:pool/join/:id", a.HandleJoin)
+	a.handler = a.acm.HTTPHandler(cors.Default().Handler(router))
 	return a
 }
 
 func (a *API) ListenAndServe(addr string) error {
-	level.Info(a.logger).Log("msg", "Listening", "addr", addr)
-	return http.ListenAndServe(addr, cors.Default().Handler(a.router))
+	level.Info(a.logger).Log("msg", "Listening", "addr", addr, "proto", "http")
+	return http.ListenAndServe(addr, a.handler)
 }
 
 func (a *API) ListenAndServeTLS(addr string) error {
-	level.Info(a.logger).Log("msg", "Listening", "addr", addr)
-	return http.ListenAndServe(addr, a.acm.HTTPHandler(cors.Default().Handler(a.router)))
+	tlsConfig := &tls.Config{
+		GetCertificate: a.acm.GetCertificate,
+	}
+	ln, err := tls.Listen("tcp", addr, tlsConfig)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{Addr: addr, Handler: a.handler}
+	level.Info(a.logger).Log("msg", "Listening", "addr", addr, "proto", "https")
+	return server.Serve(ln)
 }
 
 type poolsResponse struct {
@@ -95,7 +104,7 @@ func (a *API) HandleJoin(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		return
 	}
 
-	answer, err := pool.NewSession(string(sd))
+	answer, err := pool.NewSession(string(sd), ps.ByName("id"))
 	if err != nil {
 		level.Debug(a.logger).Log("msg", "Invalid sd", "err", err, "sd", sd)
 		http.Error(w, "Invalid SD", http.StatusBadRequest)
