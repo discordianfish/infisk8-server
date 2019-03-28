@@ -10,6 +10,7 @@ import (
 
 	"github.com/discordianfish/infisk8-server/manager"
 	"github.com/go-kit/kit/log"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/go-kit/kit/log/level"
 	"github.com/julienschmidt/httprouter"
 	"github.com/rs/cors"
@@ -38,6 +39,7 @@ func New(logger log.Logger, manager *manager.Manager, acm *autocert.Manager) *AP
 	router.GET("/pools", a.HandlePools)
 	router.PUT("/pool/:pool", a.HandleCreate)
 	router.POST("/pool/:pool/join/:id", a.HandleJoin)
+	router.Handler("GET", "/metrics", promhttp.Handler())
 	a.handler = a.acm.HTTPHandler(cors.Default().Handler(router))
 	return a
 }

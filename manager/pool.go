@@ -7,6 +7,7 @@ import (
 	"github.com/pions/webrtc"
 	"github.com/pions/webrtc/pkg/datachannel"
 	"github.com/pions/webrtc/pkg/ice"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
@@ -18,7 +19,34 @@ const (
 
 var (
 	letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+	sessionGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "infisk8_sessions",
+		Help: "Current number of sessions",
+	})
+
+	poolGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "infisk8_pools",
+		Help: "Current number of pools",
+	})
+
+	messageSentCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "infisk8_messages_sent_total",
+		Help: "Total number of messages sent",
+	})
+
+	messageReceivedCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "infisk8_messages_received_total",
+		Help: "Total number of messages received",
+	})
 )
+
+func init() {
+	prometheus.MustRegister(sessionGauge)
+	prometheus.MustRegister(poolGauge)
+	prometheus.MustRegister(messageSentCounter)
+	prometheus.MustRegister(messageReceivedCounter)
+}
 
 func genID() string {
 	c := make([]rune, idLen)
@@ -77,6 +105,7 @@ func (m *Manager) NewPool(name string) (*Pool, error) {
 		sessions: &map[string]*Session{},
 	}
 	(*m.pools)[name] = p
+	poolGauge.Set(float64(len(*m.pools)))
 	return p, nil
 }
 
@@ -93,7 +122,21 @@ func (r *Pool) NewSession(sd, id string) (webrtc.RTCSessionDescription, error) {
 		return webrtc.RTCSessionDescription{}, err
 	}
 	(*r.sessions)[id] = session
+	sessionGauge.Set(float64(len(*r.sessions)))
 	return session.Connect(sd)
+}
+
+func (p *Pool) CloseSession(id string) error {
+	session, ok := (*p.sessions)[id]
+	if !ok {
+		return fmt.Errorf("Couldn't find session with id %s", id)
+	}
+	if err := session.pc.Close(); err != nil {
+		return err
+	}
+	delete(*p.sessions, id)
+	sessionGauge.Set(float64(len(*p.sessions)))
+	return nil
 }
 
 func (p *Pool) Broadcast(cid, label string, data []byte) {
@@ -107,6 +150,7 @@ func (p *Pool) Broadcast(cid, label string, data []byte) {
 		if rand.Intn(100) < 1 {
 			level.Debug(p.logger).Log("msg", "<", "id", id, "data", string(data))
 		}
+		messageSentCounter.Inc()
 		if err := s.dc[label].Send(datachannel.PayloadString{Data: data}); err != nil {
 			level.Warn(p.logger).Log("msg", "Couldn't send data", "error", err, "id", id)
 		}
@@ -135,7 +179,7 @@ func NewSession(pool *Pool, id string) (*Session, error) {
 	}
 
 	p := &Session{
-		logger: pool.logger,
+		logger: log.With(pool.logger, "session", id),
 		Pool:   pool,
 		ID:     id,
 		pc:     pc,
@@ -149,6 +193,12 @@ func NewSession(pool *Pool, id string) (*Session, error) {
 
 func (p *Session) OnICEConnectionStateChange(connectionState ice.ConnectionState) {
 	level.Info(p.logger).Log("msg", "ICE Connection State has changed", "connectionState", connectionState.String())
+	switch connectionState {
+	case ice.ConnectionStateFailed, ice.ConnectionStateDisconnected, ice.ConnectionStateClosed:
+		if err := p.Pool.CloseSession(p.ID); err != nil {
+			level.Error(p.logger).Log("msg", "Couldn't close session", "error", err)
+		}
+	}
 }
 
 func (p *Session) OnDataChannel(d *webrtc.RTCDataChannel) {
@@ -162,6 +212,7 @@ func (p *Session) OnDataChannel(d *webrtc.RTCDataChannel) {
 }
 
 func (p *Session) OnMessage(label string, payload datachannel.Payload) {
+	messageReceivedCounter.Inc()
 	switch pt := payload.(type) {
 	case *datachannel.PayloadString:
 		p.Pool.Broadcast(p.ID, label, pt.Data)
