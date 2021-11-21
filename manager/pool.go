@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/pions/webrtc"
-	"github.com/pions/webrtc/pkg/datachannel"
-	"github.com/pions/webrtc/pkg/ice"
+	"github.com/pion/webrtc/v3"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/go-kit/kit/log"
@@ -63,10 +61,13 @@ type Manager struct {
 }
 
 func NewManager(logger log.Logger) *Manager {
-	return &Manager{
+	m := &Manager{
 		logger: logger,
 		pools:  &map[string]*Pool{},
 	}
+	// FIXME: Remove
+	m.NewPool("test")
+	return m
 }
 
 func (m *Manager) Pools() []string {
@@ -95,8 +96,8 @@ func (m *Manager) NewPool(name string) (*Pool, error) {
 	}
 	p := &Pool{
 		logger: log.With(m.logger, "pool", name),
-		config: webrtc.RTCConfiguration{
-			IceServers: []webrtc.RTCIceServer{
+		config: webrtc.Configuration{
+			ICEServers: []webrtc.ICEServer{
 				{
 					URLs: []string{"stun:stun.l.google.com:19302"},
 				},
@@ -112,14 +113,14 @@ func (m *Manager) NewPool(name string) (*Pool, error) {
 // Pool manages sessions
 type Pool struct {
 	logger   log.Logger
-	config   webrtc.RTCConfiguration
+	config   webrtc.Configuration
 	sessions *map[string]*Session
 }
 
-func (r *Pool) NewSession(sd, id string) (webrtc.RTCSessionDescription, error) {
+func (r *Pool) NewSession(sd []byte, id string) (webrtc.SessionDescription, error) {
 	session, err := NewSession(r, id)
 	if err != nil {
-		return webrtc.RTCSessionDescription{}, err
+		return webrtc.SessionDescription{}, err
 	}
 	(*r.sessions)[id] = session
 	sessionGauge.Set(float64(len(*r.sessions)))
@@ -151,7 +152,7 @@ func (p *Pool) Broadcast(cid, label string, data []byte) {
 			level.Debug(p.logger).Log("msg", "<", "id", id, "data", string(data))
 		}
 		messageSentCounter.Inc()
-		if err := s.dc[label].Send(datachannel.PayloadString{Data: data}); err != nil {
+		if err := s.dc[label].Send(data); err != nil {
 			level.Warn(p.logger).Log("msg", "Couldn't send data", "error", err, "id", id)
 		}
 		// FIXME: Consider binary
@@ -168,12 +169,12 @@ type Session struct {
 	*Pool
 	ID   string
 	open bool
-	pc   *webrtc.RTCPeerConnection
-	dc   map[string]*webrtc.RTCDataChannel
+	pc   *webrtc.PeerConnection
+	dc   map[string]*webrtc.DataChannel
 }
 
 func NewSession(pool *Pool, id string) (*Session, error) {
-	pc, err := webrtc.New(pool.config)
+	pc, err := webrtc.NewPeerConnection(pool.config)
 	if err != nil {
 		return nil, err
 	}
@@ -183,44 +184,37 @@ func NewSession(pool *Pool, id string) (*Session, error) {
 		Pool:   pool,
 		ID:     id,
 		pc:     pc,
-		dc:     make(map[string]*webrtc.RTCDataChannel),
+		dc:     make(map[string]*webrtc.DataChannel),
 	}
 
-	pc.OnICEConnectionStateChange = p.OnICEConnectionStateChange
-	pc.OnDataChannel = p.OnDataChannel
+	pc.OnConnectionStateChange(p.OnConnectionStateChange)
+	pc.OnDataChannel(p.OnDataChannel)
 	return p, nil
 }
 
-func (p *Session) OnICEConnectionStateChange(connectionState ice.ConnectionState) {
+func (p *Session) OnConnectionStateChange(connectionState webrtc.PeerConnectionState) {
 	level.Info(p.logger).Log("msg", "ICE Connection State has changed", "connectionState", connectionState.String())
 	switch connectionState {
-	case ice.ConnectionStateFailed, ice.ConnectionStateDisconnected, ice.ConnectionStateClosed:
+	case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateClosed:
 		if err := p.Pool.CloseSession(p.ID); err != nil {
 			level.Error(p.logger).Log("msg", "Couldn't close session", "error", err)
 		}
 	}
 }
 
-func (p *Session) OnDataChannel(d *webrtc.RTCDataChannel) {
-	p.dc[d.Label] = d
+func (p *Session) OnDataChannel(d *webrtc.DataChannel) {
+	p.dc[d.Label()] = d
 	level.Info(p.logger).Log("msg", "New data channel", "label", d.Label, "id", d.ID)
 
-	d.OnOpen = p.OnOpen
+	d.OnOpen(p.OnOpen)
 
-	d.OnMessage = func(payload datachannel.Payload) { p.OnMessage(d.Label, payload) }
-	d.Onmessage = d.OnMessage // FIXME: Upstream bug?
+	d.OnMessage(func(message webrtc.DataChannelMessage) { p.OnMessage(d.Label(), message) })
+	// d.Onmessage = d.OnMessage // FIXME: Upstream bug?
 }
 
-func (p *Session) OnMessage(label string, payload datachannel.Payload) {
+func (p *Session) OnMessage(label string, message webrtc.DataChannelMessage) {
 	messageReceivedCounter.Inc()
-	switch pt := payload.(type) {
-	case *datachannel.PayloadString:
-		p.Pool.Broadcast(p.ID, label, pt.Data)
-	case *datachannel.PayloadBinary:
-		p.Pool.Broadcast(p.ID, label, pt.Data)
-	default:
-		fmt.Printf("Message '%s' from DataChannel '%s' no payload \n", pt.PayloadType().String(), label)
-	}
+	p.Pool.Broadcast(p.ID, label, message.Data)
 }
 
 // OnOpen is called when a connection was established and updates clients
@@ -228,13 +222,17 @@ func (p *Session) OnOpen() {
 	p.open = true
 }
 
-func (p *Session) Connect(sd string) (webrtc.RTCSessionDescription, error) {
-	offer := webrtc.RTCSessionDescription{
-		Type: webrtc.RTCSdpTypeOffer,
-		Sdp:  string(sd),
+func (p *Session) Connect(sd []byte) (webrtc.SessionDescription, error) {
+	offer := webrtc.SessionDescription{
+		Type: webrtc.SDPTypeOffer,
+		SDP: string(sd),
 	}
+	/*
+	if err := json.Unmarshal(sd, &offer); err != nil {
+		return webrtc.SessionDescription{}, err
+	}*/
 	if err := p.pc.SetRemoteDescription(offer); err != nil {
-		return webrtc.RTCSessionDescription{}, err
+		return webrtc.SessionDescription{}, fmt.Errorf("Couldn't set remove description: %w", err)
 	}
 	return p.pc.CreateAnswer(nil)
 }

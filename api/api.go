@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	sdMaxLen = 1024
+	sdMaxLen = 10240
 )
 
 type API struct {
@@ -106,9 +106,9 @@ func (a *API) HandleJoin(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		return
 	}
 
-	answer, err := pool.NewSession(string(sd), ps.ByName("id"))
+	answer, err := pool.NewSession(sd, ps.ByName("id"))
 	if err != nil {
-		level.Debug(a.logger).Log("msg", "Invalid sd", "err", err, "sd", sd)
+		level.Debug(a.logger).Log("msg", "Error creating session", "err", err, "sd", sd)
 		http.Error(w, "Invalid SD", http.StatusBadRequest)
 		return
 	}
