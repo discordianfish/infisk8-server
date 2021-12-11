@@ -186,7 +186,7 @@ func NewSession(pool *Pool, id string) (*Session, error) {
 		pc:     pc,
 		dc:     make(map[string]*webrtc.DataChannel),
 	}
-
+	level.Debug(p.logger).Log("msg", "NewSession")
 	pc.OnConnectionStateChange(p.OnConnectionStateChange)
 	pc.OnDataChannel(p.OnDataChannel)
 	return p, nil
@@ -209,7 +209,6 @@ func (p *Session) OnDataChannel(d *webrtc.DataChannel) {
 	d.OnOpen(p.OnOpen)
 
 	d.OnMessage(func(message webrtc.DataChannelMessage) { p.OnMessage(d.Label(), message) })
-	// d.Onmessage = d.OnMessage // FIXME: Upstream bug?
 }
 
 func (p *Session) OnMessage(label string, message webrtc.DataChannelMessage) {
@@ -219,6 +218,7 @@ func (p *Session) OnMessage(label string, message webrtc.DataChannelMessage) {
 
 // OnOpen is called when a connection was established and updates clients
 func (p *Session) OnOpen() {
+	level.Debug(p.logger).Log("msg", "Session open")
 	p.open = true
 }
 
@@ -227,12 +227,13 @@ func (p *Session) Connect(sd []byte) (webrtc.SessionDescription, error) {
 		Type: webrtc.SDPTypeOffer,
 		SDP: string(sd),
 	}
+	level.Debug(p.logger).Log("msg", "Connecting..", "sdp", offer.SDP)
 	/*
 	if err := json.Unmarshal(sd, &offer); err != nil {
 		return webrtc.SessionDescription{}, err
 	}*/
 	if err := p.pc.SetRemoteDescription(offer); err != nil {
-		return webrtc.SessionDescription{}, fmt.Errorf("Couldn't set remove description: %w", err)
+		return webrtc.SessionDescription{}, fmt.Errorf("Couldn't set remote description: %w", err)
 	}
 	return p.pc.CreateAnswer(nil)
 }
